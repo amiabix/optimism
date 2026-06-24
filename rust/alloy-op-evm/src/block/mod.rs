@@ -966,10 +966,14 @@ where
 
         let balance_increments =
             post_block_balance_increments::<Header>(&self.spec, self.evm.block(), &[], None);
+        // Sort balance increments by address for deterministic ordering (required for ZisK hints).
+        let mut balance_increments_sorted: Vec<_> =
+            balance_increments.clone().into_iter().collect();
+        balance_increments_sorted.sort_unstable_by_key(|(addr, _)| **addr);
         // increment balances
         self.evm
             .db_mut()
-            .increment_balances(balance_increments.clone())
+            .increment_balances(balance_increments_sorted)
             .map_err(|_| BlockValidationError::IncrementBalanceFailed)?;
         // call state hook with changes due to balance increments.
         self.system_caller.try_on_state_with(|| {
