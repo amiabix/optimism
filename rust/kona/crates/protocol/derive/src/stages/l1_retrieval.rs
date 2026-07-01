@@ -2,7 +2,7 @@
 
 use crate::{
     DataAvailabilityProvider, FrameQueueProvider, OriginAdvancer, OriginProvider, PipelineError,
-    PipelineErrorKind, PipelineResult, Stage,
+    PipelineErrorKind, PipelineResult, Stage, cycle,
 };
 use alloc::boxed::Box;
 use alloy_eips::BlockNumHash;
@@ -93,7 +93,11 @@ where
         // SAFETY: The above check ensures that `next` is not None.
         let next = self.next.as_ref().expect("infallible");
 
-        match self.provider.next(next, self.prev.batcher_addr()).await {
+        cycle::start("derivation-l1-retrieval");
+        let data = self.provider.next(next, self.prev.batcher_addr()).await;
+        cycle::end("derivation-l1-retrieval");
+
+        match data {
             Ok(data) => Ok(data),
             Err(e) => {
                 if e == PipelineErrorKind::Temporary(PipelineError::Eof) {

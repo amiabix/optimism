@@ -76,6 +76,7 @@ kona-registry.workspace = true
 
 [features]
 default = []
+cycle-tracker = ["std"]
 std = [
 	"alloy-consensus/std",
 	"alloy-eips/std",

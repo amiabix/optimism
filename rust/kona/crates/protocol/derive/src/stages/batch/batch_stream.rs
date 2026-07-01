@@ -2,7 +2,7 @@
 
 use crate::{
     L2ChainProvider, NextBatchProvider, OriginAdvancer, OriginProvider, PipelineError,
-    PipelineResult, Stage,
+    PipelineResult, Stage, cycle,
 };
 use alloc::{boxed::Box, collections::VecDeque, sync::Arc};
 use alloy_eips::BlockNumHash;
@@ -89,7 +89,10 @@ where
         l1_origins: &[BlockInfo],
     ) -> Result<(), SpanBatchError> {
         if let Some(span) = self.span.take() {
-            self.buffer.extend(span.get_singular_batches(l1_origins, parent)?);
+            cycle::start("derivation-span-expand");
+            let batches = span.get_singular_batches(l1_origins, parent);
+            cycle::end("derivation-span-expand");
+            self.buffer.extend(batches?);
         }
         #[cfg(feature = "metrics")]
         {
@@ -129,15 +132,21 @@ where
         // through this stage to the BatchQueue stage.
         if !self.is_active()? {
             trace!(target: "batch_span", "BatchStream stage is inactive, pass-through.");
-            return self.prev.next_batch().await;
+            cycle::start("derivation-batch-stream-input");
+            let batch = self.prev.next_batch().await;
+            cycle::end("derivation-batch-stream-input");
+            return batch;
         }
 
         // If the buffer is empty, attempt to pull a batch from the previous stage.
         if self.buffer.is_empty() {
             // Safety: bubble up any errors from the batch reader.
+            cycle::start("derivation-batch-stream-input");
+            let batch = self.prev.next_batch().await;
+            cycle::end("derivation-batch-stream-input");
             let batch_with_inclusion = BatchWithInclusionBlock::new(
                 self.origin().ok_or(PipelineError::MissingOrigin.crit())?,
-                self.prev.next_batch().await?,
+                batch?,
             );
 
             // If the next batch is a singular batch, it is immediately
@@ -148,7 +157,8 @@ where
                 Batch::Span(b) => {
                     #[cfg(feature = "metrics")]
                     let start = std::time::Instant::now();
-                    let (validity, _) = b
+                    cycle::start("derivation-span-prefix-check");
+                    let checked = b
                         .check_batch_prefix(
                             self.config.as_ref(),
                             l1_origins,
@@ -157,6 +167,8 @@ where
                             &mut self.fetcher,
                         )
                         .await;
+                    cycle::end("derivation-span-prefix-check");
+                    let (validity, _) = checked;
                     kona_macros::record!(
                         histogram,
                         crate::metrics::Metrics::PIPELINE_CHECK_BATCH_PREFIX,
@@ -194,7 +206,11 @@ where
         }
 
         // Attempt to pull a SingleBatch out of the SpanBatch.
-        match self.get_single_batch(parent, l1_origins) {
+        cycle::start("derivation-span-next-batch");
+        let single_batch = self.get_single_batch(parent, l1_origins);
+        cycle::end("derivation-span-next-batch");
+
+        match single_batch {
             Ok(Some(single_batch)) => Ok(Batch::Single(single_batch)),
             Ok(None) => Err(PipelineError::NotEnoughData.temp()),
             Err(e) => {

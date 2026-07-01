@@ -2,6 +2,7 @@
 
 use super::NextBatchProvider;
 use crate::{
+    cycle,
     errors::{PipelineEncodingError, PipelineError, PipelineErrorKind, ResetError},
     traits::{AttributesProvider, L2ChainProvider, OriginAdvancer, OriginProvider, Stage},
     types::PipelineResult,
@@ -129,8 +130,10 @@ where
         let mut remaining = Vec::new();
         for i in 0..self.batches.len() {
             let batch = &self.batches[i];
+            cycle::start("derivation-batch-validity-check");
             let validity =
                 batch.check_batch(&self.cfg, &self.l1_blocks, parent, &mut self.fetcher).await;
+            cycle::end("derivation-batch-validity-check");
             match validity {
                 BatchValidity::Future => {
                     // Drop Future batches post-holocene.
@@ -239,11 +242,13 @@ where
         let origin = self.origin.ok_or(PipelineError::MissingOrigin.crit())?;
         let data = BatchWithInclusionBlock { inclusion_block: origin, batch };
         // If we drop the batch, validation logs the drop reason with WARN level.
+        cycle::start("derivation-batch-add-validity-check");
         let validity =
             data.check_batch(&self.cfg, &self.l1_blocks, parent, &mut self.fetcher).await;
+        cycle::end("derivation-batch-add-validity-check");
         // Post-Holocene, future batches are dropped due to prevent gaps.
-        let drop = validity.is_drop() ||
-            (self.cfg.is_holocene_active(origin.timestamp) && validity.is_future());
+        let drop = validity.is_drop()
+            || (self.cfg.is_holocene_active(origin.timestamp) && validity.is_future());
         if drop {
             self.prev.flush();
             return Ok(());
@@ -337,7 +342,11 @@ where
 
         // Load more data into the batch queue.
         let mut out_of_data = false;
-        match self.prev.next_batch(parent, &self.l1_blocks).await {
+        cycle::start("derivation-batch-queue-input");
+        let incoming_batch = self.prev.next_batch(parent, &self.l1_blocks).await;
+        cycle::end("derivation-batch-queue-input");
+
+        match incoming_batch {
             Ok(b) => {
                 if origin_behind {
                     warn!(target: "batch_queue", "Dropping batch: Origin is behind");
@@ -364,7 +373,11 @@ where
         }
 
         // Attempt to derive more batches.
-        let batch = match self.derive_next_batch(out_of_data, parent).await {
+        cycle::start("derivation-batch-derive");
+        let derived_batch = self.derive_next_batch(out_of_data, parent).await;
+        cycle::end("derivation-batch-derive");
+
+        let batch = match derived_batch {
             Ok(b) => b,
             Err(e) => match e {
                 PipelineErrorKind::Temporary(PipelineError::Eof) => {
@@ -382,9 +395,13 @@ where
         match batch {
             Batch::Single(sb) => Ok(sb),
             Batch::Span(sb) => {
-                let batches = match sb.get_singular_batches(&self.l1_blocks, parent).map_err(|e| {
+                cycle::start("derivation-batch-queue-span-expand");
+                let batches = sb.get_singular_batches(&self.l1_blocks, parent).map_err(|e| {
                     PipelineError::BadEncoding(PipelineEncodingError::SpanBatchError(e)).crit()
-                }) {
+                });
+                cycle::end("derivation-batch-queue-span-expand");
+
+                let batches = match batches {
                     Ok(b) => b,
                     Err(e) => {
                         return Err(e);

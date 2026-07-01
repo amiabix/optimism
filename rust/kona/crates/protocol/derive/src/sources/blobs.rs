@@ -2,7 +2,7 @@
 
 use crate::{
     BlobData, BlobProvider, ChainProvider, DataAvailabilityProvider, PipelineError,
-    PipelineErrorKind, PipelineResult, ResetError,
+    PipelineErrorKind, PipelineResult, ResetError, cycle,
 };
 use alloc::{boxed::Box, vec::Vec};
 use alloy_consensus::{
@@ -116,13 +116,18 @@ where
             return Ok(());
         }
 
+        cycle::start("derivation-l1-block-transactions");
         let info = self
             .chain_provider
             .block_info_and_transactions_by_hash(block_ref.hash)
             .await
-            .map_err(Into::into)?;
+            .map_err(Into::into);
+        cycle::end("derivation-l1-block-transactions");
+        let info = info?;
 
+        cycle::start("derivation-blob-tx-filter");
         let (mut data, blob_hashes) = self.extract_blob_data(info.1, batcher_address);
+        cycle::end("derivation-blob-tx-filter");
 
         // If there are no hashes, set the calldata and return.
         if blob_hashes.is_empty() {
@@ -135,6 +140,7 @@ where
         //   BlobNotFound  -> PipelineErrorKind::Reset   (missed/orphaned slot)
         //   Backend       -> PipelineErrorKind::Temporary (transient, retry)
         //   others        -> PipelineErrorKind::Critical
+        cycle::start("derivation-blob-fetch");
         let blobs = self
             .blob_fetcher
             .get_and_validate_blobs(block_ref, &blob_hashes)
@@ -160,16 +166,24 @@ where
                         "Failed to fetch blobs: {kind}"
                     );
                 }
-            })?;
+            });
+        cycle::end("derivation-blob-fetch");
+        let blobs = blobs?;
 
         // Fill the blob pointers.
         let mut filled_blobs = 0;
-        for blob in &mut data {
-            let should_increment = blob.fill(&blobs, filled_blobs)?;
-            if should_increment {
-                filled_blobs += 1;
+        cycle::start("derivation-blob-fill");
+        let fill_result: Result<(), PipelineErrorKind> = (|| {
+            for blob in &mut data {
+                let should_increment = blob.fill(&blobs, filled_blobs)?;
+                if should_increment {
+                    filled_blobs += 1;
+                }
             }
-        }
+            Ok(())
+        })();
+        cycle::end("derivation-blob-fill");
+        fill_result?;
 
         // Post-loop over-fill check: if the provider returned more blobs than were
         // requested, the pipeline state is inconsistent. Reset so the pipeline retries
@@ -217,7 +231,10 @@ where
 
         // Decode the blob data to raw bytes.
         // Otherwise, ignore blob and recurse next.
-        match next_data.decode() {
+        cycle::start("derivation-blob-decode");
+        let decoded = next_data.decode();
+        cycle::end("derivation-blob-decode");
+        match decoded {
             Ok(d) => Ok(d),
             Err(_) => {
                 warn!(target: "blob_source", "Failed to decode blob data, skipping");

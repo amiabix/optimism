@@ -1,6 +1,6 @@
 //! Contains the [`BatchReader`] which is used to iteratively consume batches from raw data.
 
-use crate::{Batch, BrotliDecompressionError, decompress_brotli};
+use crate::{Batch, BrotliDecompressionError, cycle, decompress_brotli};
 use alloc::vec::Vec;
 use alloy_primitives::Bytes;
 use alloy_rlp::Decodable;
@@ -82,8 +82,8 @@ impl BatchReader {
             Some(data) => {
                 // Peek at the data to determine the compression type.
                 let compression_type = data[0];
-                if (compression_type & 0x0F) == Self::ZLIB_DEFLATE_COMPRESSION_METHOD ||
-                    (compression_type & 0x0F) == Self::ZLIB_RESERVED_COMPRESSION_METHOD
+                if (compression_type & 0x0F) == Self::ZLIB_DEFLATE_COMPRESSION_METHOD
+                    || (compression_type & 0x0F) == Self::ZLIB_RESERVED_COMPRESSION_METHOD
                 {
                     self.decompress_zlib(data)
                 } else if compression_type == Self::CHANNEL_VERSION_BROTLI {
@@ -99,40 +99,56 @@ impl BatchReader {
         // Decompress with a limit to prevent zip-bomb attacks.
         // Per spec, if decompressed data exceeds the limit, the output is
         // truncated to max_rlp_bytes_per_channel bytes (not rejected).
-        match decompress_to_vec_zlib_with_limit(&data, self.max_rlp_bytes_per_channel) {
+        cycle::start("derivation-batch-zlib-decompress");
+        let result = match decompress_to_vec_zlib_with_limit(&data, self.max_rlp_bytes_per_channel)
+        {
             Ok(decompressed) => {
                 self.decompressed = decompressed;
+                Ok(())
             }
             Err(e) if (e.status == TINFLStatus::HasMoreOutput || !e.output.is_empty()) => {
                 // Either: limit reached — truncate per spec and keep partial output.
                 // Or: decompression error with partial output — keep it so
                 // batches decoded before the error point are accepted.
                 self.decompressed = e.output;
+                Ok(())
             }
-            Err(_) => {
-                return Err(DecompressionError::ZlibError);
-            }
-        }
-        Ok(())
+            Err(_) => Err(DecompressionError::ZlibError),
+        };
+        cycle::end("derivation-batch-zlib-decompress");
+        result
     }
 
     fn decompress_brotli(&mut self, data: Vec<u8>) -> Result<(), DecompressionError> {
         self.brotli_used = true;
         // Note: the first byte of the channel data is the Brotli channel version but not part of
         // the compressed data, so it's skipped here but not for zlib.
-        self.decompressed = decompress_brotli(&data[1..], self.max_rlp_bytes_per_channel)?;
+        cycle::start("derivation-batch-brotli-decompress");
+        let decompressed = decompress_brotli(&data[1..], self.max_rlp_bytes_per_channel);
+        cycle::end("derivation-batch-brotli-decompress");
+        self.decompressed = decompressed?;
         Ok(())
     }
 
     /// Pulls out the next batch from the reader.
     pub fn next_batch(&mut self, cfg: &RollupConfig) -> Option<Batch> {
         // Ensure the data is decompressed.
-        self.decompress().ok()?;
+        cycle::start("derivation-batch-decompress");
+        let decompressed = self.decompress();
+        cycle::end("derivation-batch-decompress");
+        decompressed.ok()?;
 
         // Decompress and RLP decode the batch data, before finally decoding the batch itself.
         let decompressed_reader = &mut self.decompressed.as_slice()[self.cursor..].as_ref();
-        let bytes = Bytes::decode(decompressed_reader).ok()?;
-        let Ok(batch) = Batch::decode(&mut bytes.as_ref(), cfg) else {
+        cycle::start("derivation-batch-rlp-decode");
+        let bytes = Bytes::decode(decompressed_reader);
+        cycle::end("derivation-batch-rlp-decode");
+        let bytes = bytes.ok()?;
+
+        cycle::start("derivation-batch-payload-decode");
+        let batch = Batch::decode(&mut bytes.as_ref(), cfg);
+        cycle::end("derivation-batch-payload-decode");
+        let Ok(batch) = batch else {
             return None;
         };
 

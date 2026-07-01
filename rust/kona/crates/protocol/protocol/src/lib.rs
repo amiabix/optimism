@@ -23,6 +23,8 @@ pub use batch::{
 mod brotli;
 pub use brotli::{BrotliDecompressionError, decompress_brotli};
 
+mod cycle;
+
 mod sync;
 pub use sync::SyncStatus;
 

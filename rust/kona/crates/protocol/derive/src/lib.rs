@@ -5,12 +5,14 @@
     issue_tracker_base_url = "https://github.com/ethereum-optimism/optimism/issues/"
 )]
 #![cfg_attr(docsrs, feature(doc_cfg))]
-#![cfg_attr(not(feature = "metrics"), no_std)]
+#![cfg_attr(not(any(feature = "metrics", feature = "cycle-tracker")), no_std)]
 
 extern crate alloc;
 
 #[macro_use]
 extern crate tracing;
+
+mod cycle;
 
 mod attributes;
 pub use attributes::StatefulAttributesBuilder;

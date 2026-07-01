@@ -2,6 +2,7 @@
 
 use super::{ChannelAssembler, ChannelBank, ChannelReaderProvider, NextFrameProvider};
 use crate::{
+    cycle,
     errors::PipelineError,
     traits::{OriginAdvancer, OriginProvider, Stage},
     types::PipelineResult,
@@ -166,13 +167,16 @@ where
     async fn next_data(&mut self) -> PipelineResult<Option<Bytes>> {
         self.attempt_update()?;
 
-        if let Some(channel_assembler) = self.channel_assembler.as_mut() {
+        cycle::start("derivation-channel-data");
+        let data = if let Some(channel_assembler) = self.channel_assembler.as_mut() {
             channel_assembler.next_data().await
         } else if let Some(channel_bank) = self.channel_bank.as_mut() {
             channel_bank.next_data().await
         } else {
             Err(PipelineError::NotEnoughData.temp())
-        }
+        };
+        cycle::end("derivation-channel-data");
+        data
     }
 }
 

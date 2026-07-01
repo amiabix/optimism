@@ -1,7 +1,7 @@
 //! This module contains the [`FrameQueue`] stage of the derivation pipeline.
 
 use crate::{
-    NextFrameProvider, OriginAdvancer, OriginProvider, PipelineError, PipelineResult, Stage,
+    NextFrameProvider, OriginAdvancer, OriginProvider, PipelineError, PipelineResult, Stage, cycle,
 };
 use alloc::{boxed::Box, collections::VecDeque, sync::Arc};
 use alloy_eips::BlockNumHash;
@@ -112,7 +112,11 @@ where
             return Ok(());
         }
 
-        let data = match self.prev.next_data().await {
+        cycle::start("derivation-frame-data");
+        let data = self.prev.next_data().await;
+        cycle::end("derivation-frame-data");
+
+        let data = match data {
             Ok(data) => data,
             Err(e) => {
                 debug!(target: "frame_queue", "Failed to retrieve data: {:?}", e);
@@ -121,7 +125,11 @@ where
             }
         };
 
-        let Ok(frames) = Frame::parse_frames(&data.into()) else {
+        cycle::start("derivation-frame-parse");
+        let frames = Frame::parse_frames(&data.into());
+        cycle::end("derivation-frame-parse");
+
+        let Ok(frames) = frames else {
             // There may be more frames in the queue for the
             // pipeline to advance, so don't return an error here.
             error!(target: "frame_queue", "Failed to parse frames from data.");
@@ -142,7 +150,9 @@ where
 
         // Prune frames if Holocene is active.
         let origin = self.origin().ok_or(PipelineError::MissingOrigin.crit())?;
+        cycle::start("derivation-frame-prune");
         self.prune(origin);
+        cycle::end("derivation-frame-prune");
 
         Ok(())
     }

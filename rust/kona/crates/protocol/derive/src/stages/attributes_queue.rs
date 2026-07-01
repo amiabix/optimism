@@ -1,6 +1,7 @@
 //! Contains the logic for the `AttributesQueue` stage.
 
 use crate::{
+    cycle,
     errors::{PipelineError, ResetError},
     traits::{
         AttributesBuilder, AttributesProvider, NextAttributes, OriginAdvancer, OriginProvider,
@@ -60,7 +61,10 @@ where
     /// Loads a [`SingleBatch`] from the [`AttributesProvider`] if needed.
     pub async fn load_batch(&mut self, parent: L2BlockInfo) -> PipelineResult<SingleBatch> {
         if self.batch.is_none() {
-            let batch = self.prev.next_batch(parent).await?;
+            cycle::start("derivation-attributes-load-batch");
+            let batch = self.prev.next_batch(parent).await;
+            cycle::end("derivation-attributes-load-batch");
+            let batch = batch?;
             self.batch = Some(batch);
             self.is_last_in_span = self.prev.is_last_in_span();
         }
@@ -82,7 +86,11 @@ where
         // Construct the payload attributes from the loaded batch.
         #[cfg(feature = "metrics")]
         let start = std::time::Instant::now();
-        let attributes = match self.create_next_attributes(batch, parent).await {
+        cycle::start("derivation-attributes-build");
+        let next_attributes = self.create_next_attributes(batch, parent).await;
+        cycle::end("derivation-attributes-build");
+
+        let attributes = match next_attributes {
             Ok(attributes) => attributes,
             Err(e) => {
                 return Err(e);

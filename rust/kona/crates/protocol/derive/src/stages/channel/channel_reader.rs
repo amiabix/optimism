@@ -2,6 +2,7 @@
 
 use crate::{
     BatchStreamProvider, OriginAdvancer, OriginProvider, PipelineError, PipelineResult, Stage,
+    cycle,
 };
 use alloc::{boxed::Box, sync::Arc};
 use alloy_eips::BlockNumHash;
@@ -113,7 +114,11 @@ where
     }
 
     async fn next_batch(&mut self) -> PipelineResult<Batch> {
-        if let Err(e) = self.set_batch_reader().await {
+        cycle::start("derivation-channel-reader-set");
+        let set_batch_reader = self.set_batch_reader().await;
+        cycle::end("derivation-channel-reader-set");
+
+        if let Err(e) = set_batch_reader {
             debug!(target: "channel_reader", "Failed to set batch reader: {:?}", e);
             self.next_channel();
             return Err(e);
@@ -121,7 +126,11 @@ where
 
         // SAFETY: The batch reader must be set above.
         let next_batch = self.next_batch.as_mut().expect("Batch reader must be set");
-        match next_batch.decompress() {
+        cycle::start("derivation-channel-decompress");
+        let decompressed = next_batch.decompress();
+        cycle::end("derivation-channel-decompress");
+
+        match decompressed {
             Ok(()) => {
                 // Record the decompressed size and type.
                 let _size = next_batch.decompressed.len() as f64;
@@ -149,7 +158,11 @@ where
         }
 
         // Read the next batch from the reader's decompressed data
-        match next_batch.next_batch(self.cfg.as_ref()).ok_or(PipelineError::NotEnoughData.temp()) {
+        cycle::start("derivation-channel-batch-decode");
+        let batch = next_batch.next_batch(self.cfg.as_ref());
+        cycle::end("derivation-channel-batch-decode");
+
+        match batch.ok_or(PipelineError::NotEnoughData.temp()) {
             Ok(batch) => {
                 kona_macros::inc!(
                     gauge,

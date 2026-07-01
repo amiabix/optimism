@@ -57,6 +57,7 @@ op-alloy-consensus = { workspace = true, features = ["k256"] }
 
 [features]
 default = []
+cycle-tracker = ["kona-protocol/cycle-tracker"]
 metrics = [ "dep:metrics" ]
 serde = [
 	"alloy-consensus/serde",
