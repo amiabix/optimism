@@ -50,6 +50,7 @@ arbitrary = { workspace = true, features = ["derive"], optional = true }
 # `serde` feature
 serde = { workspace = true, optional = true }
 alloy-serde = { workspace = true, optional = true }
+ziskos = { git = "https://github.com/0xPolygonHermez/zisk.git", tag = "v1.0.0-alpha", optional = true }
 
 # `test-utils` feature
 spin = { workspace = true, optional = true }
@@ -76,7 +77,7 @@ kona-registry.workspace = true
 
 [features]
 default = []
-cycle-tracker = ["std"]
+cycle-tracker = ["dep:ziskos", "std"]
 std = [
 	"alloy-consensus/std",
 	"alloy-eips/std",

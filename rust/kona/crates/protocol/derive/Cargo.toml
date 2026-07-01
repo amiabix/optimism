@@ -43,6 +43,7 @@ tracing-subscriber = { workspace = true, optional = true, features = ["fmt"] }
 
 # `metrics` feature
 metrics = { workspace = true, optional = true }
+ziskos = { git = "https://github.com/0xPolygonHermez/zisk.git", tag = "v1.0.0-alpha", optional = true }
 
 [dev-dependencies]
 spin.workspace = true
@@ -57,7 +58,7 @@ op-alloy-consensus = { workspace = true, features = ["k256"] }
 
 [features]
 default = []
-cycle-tracker = ["kona-protocol/cycle-tracker"]
+cycle-tracker = ["dep:ziskos", "kona-protocol/cycle-tracker"]
 metrics = [ "dep:metrics" ]
 serde = [
 	"alloy-consensus/serde",
