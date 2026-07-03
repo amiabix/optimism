@@ -50,7 +50,7 @@ arbitrary = { workspace = true, features = ["derive"], optional = true }
 # `serde` feature
 serde = { workspace = true, optional = true }
 alloy-serde = { workspace = true, optional = true }
-ziskos = { git = "https://github.com/0xPolygonHermez/zisk.git", tag = "v1.0.0-alpha", optional = true }
+ziskos = { git = "https://github.com/0xPolygonHermez/zisk.git", rev = "459062ca8261ea6e7a522c18036fd4042844f992", optional = true }
 
 # `test-utils` feature
 spin = { workspace = true, optional = true }
