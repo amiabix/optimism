@@ -2,9 +2,10 @@
 //! through the `PreimageOracle` ABI as local keys.
 
 use crate::errors::OracleProviderError;
+use alloc::format;
 use alloy_primitives::{B256, U256};
 use kona_genesis::{L1ChainConfig, RollupConfig};
-use kona_preimage::{PreimageKey, PreimageOracleClient};
+use kona_preimage::{PreimageKey, PreimageOracleClient, errors::PreimageOracleError};
 use kona_registry::{L1_CONFIGS, ROLLUP_CONFIGS};
 use serde::{Deserialize, Serialize};
 
@@ -223,21 +224,32 @@ impl BootInfo {
                 .map_err(OracleProviderError::SliceConversion)?,
         );
 
-        // Attempt to load the rollup config from the chain ID. If there is no config for the chain,
-        // fall back to loading the config from the preimage oracle.
-        let rollup_config = if let Some(config) = ROLLUP_CONFIGS.get(&chain_id) {
-            config.clone()
-        } else {
-            warn!(
-                target: "boot_loader",
-                "No rollup config found for chain ID {}, falling back to preimage oracle. This is insecure in production without additional validation!",
-                chain_id
-            );
-            let ser_cfg = oracle
-                .get(PreimageKey::new_local(L2_ROLLUP_CONFIG_KEY.to()))
-                .await
-                .map_err(OracleProviderError::Preimage)?;
-            serde_json::from_slice(&ser_cfg).map_err(OracleProviderError::Serde)?
+        let rollup_config = match oracle
+            .get(PreimageKey::new_local(L2_ROLLUP_CONFIG_KEY.to()))
+            .await
+        {
+            Ok(ser_cfg) => {
+                let config: RollupConfig =
+                    serde_json::from_slice(&ser_cfg).map_err(OracleProviderError::Serde)?;
+                if config.l2_chain_id.id() != chain_id {
+                    return Err(OracleProviderError::Preimage(PreimageOracleError::Other(
+                        format!(
+                            "rollup config chain ID {} does not match boot chain ID {}",
+                            config.l2_chain_id.id(),
+                            chain_id
+                        ),
+                    )));
+                }
+                config
+            }
+            Err(PreimageOracleError::KeyNotFound) => {
+                if let Some(config) = ROLLUP_CONFIGS.get(&chain_id) {
+                    config.clone()
+                } else {
+                    return Err(OracleProviderError::Preimage(PreimageOracleError::KeyNotFound));
+                }
+            }
+            Err(err) => return Err(OracleProviderError::Preimage(err)),
         };
 
         // Attempt to load the rollup config from the chain ID. If there is no config for the chain,
